@@ -43,5 +43,4 @@ jobs:
           DRIVE_ACCOUNT_FOLDER_ID: "1pHJJ7MhlhFUljU2XUHsS8yKaGj-ws0X0"
           DRIVE_READY_FOLDER_ID: "1hBt9c6yLNEhl4Apbmt0kKhp6mOwTeA2a"
           DRIVE_USED_FOLDER_ID: "1B99lfVaFqLsIsitdj5eGVd3Rau9Q8sTK"
-        run: python new_post.py
-        
+        run: python eyescandy_new_post.py
