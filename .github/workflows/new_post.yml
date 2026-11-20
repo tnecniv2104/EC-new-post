@@ -37,7 +37,7 @@ jobs:
       - name: Run Eyescandy New Post
         env:
           BLUESKY_HANDLE: eyescandy.bsky.social
-          BLUESKY_PASSWORD: ${{ secrets.EYESCANDY_PASSWORD }}
+          EYESCANDY_PASSWORD: ${{ secrets.EYESCANDY_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           DRIVE_ROOT_FOLDER_ID: "1JQx_1SBOETCSMlmlQSIFOjSBuL4op5KA"
           DRIVE_ACCOUNT_FOLDER_ID: "1pHJJ7MhlhFUljU2XUHsS8yKaGj-ws0X0"
