@@ -16,6 +16,8 @@ from PIL import Image, ImageOps
 # SEXYBYNATURE - NEW POST
 # Random media selection from a limited Drive result.
 # Downloads only the selected file.
+# Supports images and videos.
+# Preserves original video aspect ratio for Bluesky.
 # Success: move original from ready to used.
 # Failure: original stays in ready.
 # ============================================================
@@ -59,7 +61,9 @@ def drive_service():
     try:
         info = json.loads(RAW_SERVICE_JSON)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Invalid Google service account JSON.") from exc
+        raise RuntimeError(
+            "Invalid Google service account JSON."
+        ) from exc
 
     credentials = service_account.Credentials.from_service_account_info(
         info,
@@ -96,7 +100,9 @@ def verify_folders(drive):
         folder = get_folder(drive, folder_id)
 
         if folder.get("mimeType") != "application/vnd.google-apps.folder":
-            raise RuntimeError(f"{expected_name} is not a Drive folder.")
+            raise RuntimeError(
+                f"{expected_name} is not a Drive folder."
+            )
 
         if folder.get("name", "").casefold() != expected_name.casefold():
             raise RuntimeError(
@@ -117,9 +123,6 @@ def verify_folders(drive):
 
 
 def select_random_media(drive):
-    # Request only one limited page of file metadata.
-    # No recursive scan and no full folder download.
-
     result = drive.files().list(
         q=f"'{DRIVE_READY_ID}' in parents and trashed=false",
         pageSize=MAX_CANDIDATES,
@@ -218,6 +221,51 @@ def run_ffmpeg(args):
         )
 
 
+def get_video_dimensions(path):
+    """
+    Read the actual dimensions of the converted video.
+    This ensures Bluesky receives the correct portrait or landscape ratio.
+    """
+
+    if not shutil.which("ffprobe"):
+        raise RuntimeError("FFprobe is not installed.")
+
+    process = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            str(path)
+        ],
+        capture_output=True,
+        text=True
+    )
+
+    if process.returncode:
+        raise RuntimeError(
+            (process.stderr or "Could not read video dimensions.")[-2500:]
+        )
+
+    try:
+        data = json.loads(process.stdout)
+        stream = data["streams"][0]
+
+        width = int(stream["width"])
+        height = int(stream["height"])
+
+    except (KeyError, IndexError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "Could not determine converted video dimensions."
+        ) from exc
+
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Invalid video dimensions.")
+
+    return width, height
+
+
 def prepare_image(path):
     with Image.open(path) as original:
         orientation = original.getexif().get(274, 1)
@@ -266,6 +314,9 @@ def prepare_video(path):
 
     output_path = CONVERTED / f"{path.stem}_compatible.mp4"
 
+    # Keep the original proportions.
+    # Maximum dimension: 1920 pixels.
+    # No square crop, no stretching and no black bars.
     video_filter = (
         "scale=w='min(1920,iw)':h='min(1920,ih)':"
         "force_original_aspect_ratio=decrease:"
@@ -284,6 +335,7 @@ def prepare_video(path):
             "-movflags", "+faststart",
             str(output_path)
         ])
+
     else:
         run_ffmpeg([
             "-i", str(path),
@@ -302,7 +354,20 @@ def prepare_video(path):
     if not output_path.exists() or not output_path.stat().st_size:
         raise RuntimeError("Video conversion failed.")
 
-    return output_path
+    # IMPORTANT:
+    # Read dimensions AFTER conversion, not from the original file.
+    width, height = get_video_dimensions(output_path)
+
+    log(f"Converted video dimensions: {width}x{height}")
+
+    if height > width:
+        log("Video orientation: PORTRAIT")
+    elif width > height:
+        log("Video orientation: LANDSCAPE")
+    else:
+        log("Video orientation: SQUARE")
+
+    return output_path, width, height
 
 
 def main():
@@ -331,7 +396,7 @@ def main():
         log(f"Image dimensions: {width}x{height}")
 
     elif extension in VIDEO_EXT:
-        upload_path = prepare_video(local_path)
+        upload_path, width, height = prepare_video(local_path)
         kind = "video"
 
     else:
@@ -362,7 +427,16 @@ def main():
     else:
         embed = models.AppBskyEmbedVideo.Main(
             video=blob,
-            alt=None
+            alt=None,
+            aspect_ratio={
+                "width": width,
+                "height": height
+            }
+        )
+
+        log(
+            f"Sending video aspect ratio to Bluesky: "
+            f"{width}:{height}"
         )
 
     response = client.send_post(
@@ -373,7 +447,10 @@ def main():
     if not response:
         raise RuntimeError("No Bluesky post response.")
 
-    log(f"Post successful: {getattr(response, 'uri', 'URI unavailable')}")
+    log(
+        f"Post successful: "
+        f"{getattr(response, 'uri', 'URI unavailable')}"
+    )
 
     # Move original only after confirmed successful post.
     move_file(drive, item)
